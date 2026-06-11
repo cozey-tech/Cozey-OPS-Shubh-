@@ -24,7 +24,8 @@ let pool = null;
 
 function getCosPool() {
   if (!pool) {
-    const url = process.env.DATABASE_MCP_URL;
+    // COS_DATABASE_URL kept as a fallback for existing deployments that set it.
+    const url = process.env.DATABASE_MCP_URL || process.env.COS_DATABASE_URL;
     if (!url) throw new Error('DATABASE_MCP_URL not configured');
     const next = new Pool({
       connectionString: url,

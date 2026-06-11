@@ -120,7 +120,14 @@ async function runQuery({ location, quality, category, model, tab, threshold }) 
   }
 
   if (tab === 'pos') {
-    const loc = location === 'all' ? 'royalmount' : location;
+    const params = [REGION];
+    let locClause;
+    if (location === 'all') {
+      locClause = `po.location_id IN ('royalmount', 'langley', 'windsor')`;
+    } else {
+      params.push(location);
+      locClause = `po.location_id = $${params.length}`;
+    }
     const rows = await queryCosReadOnly(
       `SELECT
           po.po as po_number,
@@ -135,12 +142,12 @@ async function runQuery({ location, quality, category, model, tab, threshold }) 
         FROM mcp.v_purchase_order po
         LEFT JOIN mcp.v_purchase_order_part pop ON pop.po_id = po.id AND pop.region = $1
         WHERE po.region = $1
-          AND po.location_id = $2
+          AND ${locClause}
           AND po.status NOT IN ('Arrived', 'Cancelled', 'Closed')
         GROUP BY po.po, po.status, po.eta, po.location_id, po.container, po.freight_status, po."shippingLine"
         ORDER BY po.eta ASC NULLS LAST
         LIMIT 50`,
-      [REGION, loc],
+      params,
     );
     return { pos: rows };
   }
@@ -176,13 +183,27 @@ async function runQuery({ location, quality, category, model, tab, threshold }) 
 }
 
 // Server-side cache: shared across all clients so polling collapses to ~1
-// query/min per distinct view. Keyed by the validated params.
+// query/min per distinct view. Bounded with oldest-first eviction so a flood of
+// distinct keys (e.g. many `model` values) cannot grow the heap without limit.
+const MAX_CACHE_ENTRIES = 200;
 const cache = new Map();
 
-function pruneCache(now) {
-  if (cache.size <= 100) return;
-  for (const [k, v] of cache) {
-    if (now - v.at > CACHE_MS) cache.delete(k);
+// Key on only the params each tab actually uses, so unrelated filters do not
+// fragment the cache (the POs query ignores quality/category/model; cross-FC
+// ignores location). chart is collapsed to lowstock upstream in parseParams.
+function cacheKeyFor(p) {
+  if (p.tab === 'pos') return JSON.stringify({ tab: 'pos', location: p.location });
+  if (p.tab === 'crossfc') {
+    return JSON.stringify({ tab: 'crossfc', quality: p.quality, category: p.category, model: p.model, threshold: p.threshold });
+  }
+  return JSON.stringify({ tab: p.tab, location: p.location, quality: p.quality, category: p.category, model: p.model, threshold: p.threshold });
+}
+
+function cacheSet(key, value) {
+  cache.delete(key); // re-insert at the end so recency = insertion order
+  cache.set(key, value);
+  while (cache.size > MAX_CACHE_ENTRIES) {
+    cache.delete(cache.keys().next().value); // evict oldest
   }
 }
 
@@ -192,7 +213,7 @@ module.exports = async (req, res) => {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const params = parseParams(req.query || {});
-  const key = JSON.stringify(params);
+  const key = cacheKeyFor(params);
   const now = Date.now();
 
   const hit = cache.get(key);
@@ -203,8 +224,7 @@ module.exports = async (req, res) => {
 
   try {
     const payload = await runQuery(params);
-    cache.set(key, { at: now, payload });
-    pruneCache(now);
+    cacheSet(key, { at: now, payload });
     res.setHeader('Cache-Control', 's-maxage=55, stale-while-revalidate=30');
     res.status(200).json(payload);
   } catch (err) {

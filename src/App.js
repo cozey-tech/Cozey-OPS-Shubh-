@@ -336,6 +336,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [lastSync, setLastSync] = useState(null);
+  const [stale, setStale] = useState(false);
   const [location, setLocation] = useState('royalmount');
   const [threshold, setThreshold] = useState(10);
   const [thresholdInput, setThresholdInput] = useState('10');
@@ -357,6 +358,7 @@ export default function App() {
       if (t === 'pos') setPos(data.pos || []);
       else setInventory(data.inventory || []);
       setLastSync(new Date());
+      setStale(data.stale === true); // backend served last-known data on error
       setError(null);
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
@@ -459,7 +461,9 @@ export default function App() {
             <div className="page-sub">{quality === 'both' ? 'New & Refurbished' : quality === 'new' ? 'New' : 'Refurbished'} · ≤ {threshold} units available</div>
           </div>
           <div className="topbar-right">
-            <div className="badge-live"><div className="pulse"></div>Live</div>
+            {stale
+              ? <div className="badge-live" style={{ background: '#fef3c7', color: '#92400e' }} title="Backend unavailable — showing last cached data"><i className="ti ti-alert-triangle" style={{ fontSize: 12 }} aria-hidden="true"></i>Stale</div>
+              : <div className="badge-live"><div className="pulse"></div>Live</div>}
             <button className="btn-sm" onClick={() => { setLoading(true); fetchData(activeTab); }}>
               <i className="ti ti-refresh" style={{ fontSize: 13 }} aria-hidden="true"></i>Refresh
             </button>
