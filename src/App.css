@@ -99,3 +99,11 @@ td{padding:9px 12px;color:#111827;overflow:hidden;text-overflow:ellipsis;white-s
 .s-other{background:var(--color-background-secondary);color:var(--color-text-secondary);}
 .tab-badge{font-size:10px;font-weight:500;padding:1px 6px;border-radius:99px;background:var(--color-background-danger);color:var(--color-text-danger);margin-left:4px;}
 @keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
+.tabs{display:flex;align-items:center;background:#fff;border-bottom:1px solid #e5e7eb;padding:0 20px;flex-shrink:0;overflow-x:auto;}
+.tab{display:flex;align-items:center;gap:6px;padding:10px 16px;font-size:12px;font-weight:500;color:#6b7280;border:none;background:transparent;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;font-family:'Inter',sans-serif;margin-bottom:-1px;}
+.tab:hover{color:#374151;}
+.tab.active{color:#2563eb;border-bottom-color:#2563eb;}
+.tab i{font-size:14px;}
+.panel{padding:14px 20px;display:flex;flex-direction:column;gap:10px;flex:1;overflow:hidden;}
+.tbl-card{background:#fff;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;display:flex;flex-direction:column;flex:1;min-height:0;}
+.toolbar{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid #e5e7eb;flex-shrink:0;}
