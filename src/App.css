@@ -86,3 +86,16 @@ td{padding:9px 12px;color:#111827;overflow:hidden;text-overflow:ellipsis;white-s
 .error-msg{display:flex;align-items:center;justify-content:center;flex:1;color:#dc2626;font-size:13px;gap:8px;}
 .empty{display:flex;align-items:center;justify-content:center;flex:1;flex-direction:column;gap:8px;color:#9ca3af;padding:40px;}
 .empty i{font-size:32px;opacity:.4;}
+.days-chip{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:500;padding:3px 9px;border-radius:99px;}
+.days-chip i{font-size:10px;}
+.days-urgent{background:var(--color-background-danger);color:var(--color-text-danger);}
+.days-warn{background:var(--color-background-warning);color:var(--color-text-warning);}
+.days-ok{background:var(--color-background-success);color:var(--color-text-success);}
+.days-na{background:var(--color-background-secondary);color:var(--color-text-tertiary);}
+.days-transfer{background:var(--color-background-info);color:var(--color-text-info);}
+.status-pill{display:inline-flex;align-items:center;font-size:10px;font-weight:500;padding:2px 8px;border-radius:99px;}
+.s-transit{background:var(--color-background-info);color:var(--color-text-info);}
+.s-prod{background:var(--color-background-warning);color:var(--color-text-warning);}
+.s-other{background:var(--color-background-secondary);color:var(--color-text-secondary);}
+.tab-badge{font-size:10px;font-weight:500;padding:1px 6px;border-radius:99px;background:var(--color-background-danger);color:var(--color-text-danger);margin-left:4px;}
+@keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
