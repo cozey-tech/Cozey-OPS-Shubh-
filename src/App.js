@@ -302,7 +302,7 @@ function CrossFCTab({ inventory, page, setPage }) {
               {paginated.map((r, i) => {
                 const t = transferOption(r);
                 return (
-                  <tr key={r.sku}>
+                  <tr key={`${r.sku}-${r.quality_id ?? ''}`}>
                     <td><div className="sku">{r.sku}</div><div className="model-name">{r.model_name}</div></td>
                     <td title={r.description}>{r.description}</td>
                     <td><span className={`badge ${r.quality_id === 'new' ? 'badge-new' : 'badge-ref'}`}>{r.quality_id === 'new' ? 'New' : 'Refurb'}</span></td>
@@ -355,10 +355,11 @@ export default function App() {
       const res = await fetch(`/api/inventory?${params}`);
       const data = await res.json();
       if (data.error) throw new Error(data.details || data.error);
+      const servedStale = data.stale === true; // backend served last-known cache after DB error
       if (t === 'pos') setPos(data.pos || []);
       else setInventory(data.inventory || []);
-      setLastSync(new Date());
-      setStale(data.stale === true); // backend served last-known data on error
+      if (!servedStale) setLastSync(new Date());
+      setStale(servedStale);
       setError(null);
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
