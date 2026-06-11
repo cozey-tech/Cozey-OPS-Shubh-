@@ -127,7 +127,7 @@ function LowStockTab({ inventory, search, setSearch, quality, setQuality, page, 
               {paginated.map((r, i) => {
                 const s = getStatus(r.available);
                 return (
-                  <tr key={i}>
+                  <tr key={`${r.sku}-${r.location_id}`}>
                     <td><div className="sku">{r.sku}</div><div className="model-name">{r.model_name}</div></td>
                     <td title={r.description}>{r.description}</td>
                     <td><span className={`badge ${r.quality_id === 'new' ? 'badge-new' : 'badge-ref'}`}>{r.quality_id === 'new' ? 'New' : 'Refurb'}</span></td>
@@ -178,7 +178,7 @@ function RestockTab({ inventory, page, setPage }) {
                 const days = getDaysLeft(r.available, r.orders_30d);
                 const restock = formatRestockDate(r.last_restock_date);
                 return (
-                  <tr key={i}>
+                  <tr key={`${r.sku}-${r.location_id}`}>
                     <td><div className="sku">{r.sku}</div><div className="model-name">{r.model_name}</div></td>
                     <td title={r.description}>{r.description}</td>
                     <td><span className={`badge ${r.quality_id === 'new' ? 'badge-new' : 'badge-ref'}`}>{r.quality_id === 'new' ? 'New' : 'Refurb'}</span></td>
@@ -252,7 +252,7 @@ function POTab({ pos }) {
               {pos.map((p, i) => {
                 const eta = p.eta ? new Date(p.eta).toLocaleDateString('en-CA', { month: 'short', day: 'numeric' }) : '—';
                 return (
-                  <tr key={i}>
+                  <tr key={p.po_number}>
                     <td style={{ fontFamily: 'monospace', fontWeight: 600 }}>{p.po_number}</td>
                     <td><div className="sku">{p.container || '—'}</div></td>
                     <td style={{ color: '#6b7280' }}>{p.shipping_line || '—'}</td>
@@ -302,7 +302,7 @@ function CrossFCTab({ inventory, page, setPage }) {
               {paginated.map((r, i) => {
                 const t = transferOption(r);
                 return (
-                  <tr key={i}>
+                  <tr key={r.sku}>
                     <td><div className="sku">{r.sku}</div><div className="model-name">{r.model_name}</div></td>
                     <td title={r.description}>{r.description}</td>
                     <td><span className={`badge ${r.quality_id === 'new' ? 'badge-new' : 'badge-ref'}`}>{r.quality_id === 'new' ? 'New' : 'Refurb'}</span></td>
@@ -369,7 +369,8 @@ export default function App() {
     return () => clearInterval(id);
   }, [fetchData, activeTab]);
 
-  function handleTabChange(tab) { setActiveTab(tab); setPage(1); setSearch(''); fetchData(tab); }
+  // Just flip state — the effect keyed on activeTab does the (single) fetch.
+  function handleTabChange(tab) { setActiveTab(tab); setPage(1); setSearch(''); }
 
   const stats = useMemo(() => ({
     total: inventory.length,
