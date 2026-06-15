@@ -127,7 +127,7 @@ function LowStockTab({ inventory, search, setSearch, quality, setQuality, page, 
               {paginated.map((r, i) => {
                 const s = getStatus(r.available);
                 return (
-                  <tr key={i}>
+                  <tr key={`${r.sku}-${r.location_id}`}>
                     <td><div className="sku">{r.sku}</div><div className="model-name">{r.model_name}</div></td>
                     <td title={r.description}>{r.description}</td>
                     <td><span className={`badge ${r.quality_id === 'new' ? 'badge-new' : 'badge-ref'}`}>{r.quality_id === 'new' ? 'New' : 'Refurb'}</span></td>
@@ -178,7 +178,7 @@ function RestockTab({ inventory, page, setPage }) {
                 const days = getDaysLeft(r.available, r.orders_30d);
                 const restock = formatRestockDate(r.last_restock_date);
                 return (
-                  <tr key={i}>
+                  <tr key={`${r.sku}-${r.location_id}`}>
                     <td><div className="sku">{r.sku}</div><div className="model-name">{r.model_name}</div></td>
                     <td title={r.description}>{r.description}</td>
                     <td><span className={`badge ${r.quality_id === 'new' ? 'badge-new' : 'badge-ref'}`}>{r.quality_id === 'new' ? 'New' : 'Refurb'}</span></td>
@@ -252,7 +252,7 @@ function POTab({ pos }) {
               {pos.map((p, i) => {
                 const eta = p.eta ? new Date(p.eta).toLocaleDateString('en-CA', { month: 'short', day: 'numeric' }) : '—';
                 return (
-                  <tr key={i}>
+                  <tr key={p.po_number}>
                     <td style={{ fontFamily: 'monospace', fontWeight: 600 }}>{p.po_number}</td>
                     <td><div className="sku">{p.container || '—'}</div></td>
                     <td style={{ color: '#6b7280' }}>{p.shipping_line || '—'}</td>
@@ -302,7 +302,7 @@ function CrossFCTab({ inventory, page, setPage }) {
               {paginated.map((r, i) => {
                 const t = transferOption(r);
                 return (
-                  <tr key={i}>
+                  <tr key={`${r.sku}-${r.quality_id ?? ''}`}>
                     <td><div className="sku">{r.sku}</div><div className="model-name">{r.model_name}</div></td>
                     <td title={r.description}>{r.description}</td>
                     <td><span className={`badge ${r.quality_id === 'new' ? 'badge-new' : 'badge-ref'}`}>{r.quality_id === 'new' ? 'New' : 'Refurb'}</span></td>
@@ -336,6 +336,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [lastSync, setLastSync] = useState(null);
+  const [stale, setStale] = useState(false);
   const [location, setLocation] = useState('royalmount');
   const [threshold, setThreshold] = useState(10);
   const [thresholdInput, setThresholdInput] = useState('10');
@@ -354,9 +355,11 @@ export default function App() {
       const res = await fetch(`/api/inventory?${params}`);
       const data = await res.json();
       if (data.error) throw new Error(data.details || data.error);
+      const servedStale = data.stale === true; // backend served last-known cache after DB error
       if (t === 'pos') setPos(data.pos || []);
       else setInventory(data.inventory || []);
-      setLastSync(new Date());
+      if (!servedStale) setLastSync(new Date());
+      setStale(servedStale);
       setError(null);
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
@@ -369,7 +372,8 @@ export default function App() {
     return () => clearInterval(id);
   }, [fetchData, activeTab]);
 
-  function handleTabChange(tab) { setActiveTab(tab); setPage(1); setSearch(''); fetchData(tab); }
+  // Just flip state — the effect keyed on activeTab does the (single) fetch.
+  function handleTabChange(tab) { setActiveTab(tab); setPage(1); setSearch(''); }
 
   const stats = useMemo(() => ({
     total: inventory.length,
@@ -458,7 +462,9 @@ export default function App() {
             <div className="page-sub">{quality === 'both' ? 'New & Refurbished' : quality === 'new' ? 'New' : 'Refurbished'} · ≤ {threshold} units available</div>
           </div>
           <div className="topbar-right">
-            <div className="badge-live"><div className="pulse"></div>Live</div>
+            {stale
+              ? <div className="badge-live" style={{ background: '#fef3c7', color: '#92400e' }} title="Backend unavailable — showing last cached data"><i className="ti ti-alert-triangle" style={{ fontSize: 12 }} aria-hidden="true"></i>Stale</div>
+              : <div className="badge-live"><div className="pulse"></div>Live</div>}
             <button className="btn-sm" onClick={() => { setLoading(true); fetchData(activeTab); }}>
               <i className="ti ti-refresh" style={{ fontSize: 13 }} aria-hidden="true"></i>Refresh
             </button>

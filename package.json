@@ -3,12 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "dependencies": {
-    "@supabase/supabase-js": "^2.108.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-scripts": "5.0.1",
     "web-vitals": "^2.1.4",
     "pg": "^8.11.0"
+  },
+  "engines": {
+    "node": ">=18 <=22"
   },
   "scripts": {
     "start": "react-scripts start",
