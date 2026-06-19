@@ -13,7 +13,7 @@ function applyCors(res) {
     // Fail loudly — silent CORS denial is very hard to debug.
     throw new Error(
       'DASHBOARD_ORIGIN env var is not set. ' +
-      'Set it to the app URL in Vercel (Production + Preview) before connecting production data.'
+      'Set it to the app URL in Vercel (Production + Preview) before connecting production data.',
     );
   }
   res.setHeader('Access-Control-Allow-Origin', origin);
@@ -23,16 +23,17 @@ function applyCors(res) {
 }
 
 // Timing-safe comparison of the provided office key against OFFICE_SECRET.
+// Uses SHA-256 digests so both sides are always equal length — avoids the
+// padEnd() trick which can throw on longer input and match with trailing spaces.
 // isOffice is a LIGHT check only — the real gate is Vercel Deployment Protection.
 function isOffice(req) {
   const secret = process.env.OFFICE_SECRET;
   if (!secret) return false;
   const provided = req.headers['x-office-key'] || '';
   try {
-    return crypto.timingSafeEqual(
-      Buffer.from(provided.padEnd(secret.length)),
-      Buffer.from(secret)
-    );
+    const a = crypto.createHash('sha256').update(provided).digest();
+    const b = crypto.createHash('sha256').update(secret).digest();
+    return crypto.timingSafeEqual(a, b);
   } catch {
     return false;
   }
