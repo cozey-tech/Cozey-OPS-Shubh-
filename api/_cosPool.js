@@ -1,11 +1,15 @@
 // Shared COS read-only connection pool.
-// Mirrors the conventions in cozey-tech/warehouse-dashboard-.
+// Mirrors the canonical cozey-tech/warehouse-dashboard- implementation.
 // A singleton pg.Pool with verified TLS, BEGIN READ ONLY, statement_timeout,
 // transient-error retry, and a SELECT/WITH-only guard.
+//
+// DATABASE_MCP_URL must point at the Neon POOLED endpoint (-pooler host).
+// That is what makes the singleton pool safe under serverless fan-out.
 
 const { Pool } = require('pg');
 
-const STATEMENT_TIMEOUT_MS = 28000;
+// Match canonical: 15 s. Keep below functions.maxDuration (30 s in vercel.json).
+const STATEMENT_TIMEOUT_MS = 15000;
 const RETRY_ATTEMPTS = 2;
 const READ_ONLY = /^\s*(SELECT|WITH)\b/i;
 
@@ -13,6 +17,7 @@ const READ_ONLY = /^\s*(SELECT|WITH)\b/i;
 // 57P01 = admin_shutdown (server is shutting down)
 // 57P02 = crash_shutdown (server crashed)
 // 57P03 = cannot_connect_now (server starting up)
+// 53300 = too_many_connections (connection limit hit — treat as transient)
 function isTransient(err) {
   const code = err && err.code;
   const msg = ((err && err.message) || '').toLowerCase();
@@ -20,6 +25,7 @@ function isTransient(err) {
     code === '57P01' ||
     code === '57P02' ||
     code === '57P03' ||
+    code === '53300' ||
     msg.includes('connection') ||
     msg.includes('timeout')
   );
@@ -36,12 +42,13 @@ let pool = null;
 
 function getCosPool() {
   if (!pool) {
-    // New deployments must set DATABASE_MCP_URL.
+    // New deployments must set DATABASE_MCP_URL (the Neon pooled endpoint).
     const url = process.env.DATABASE_MCP_URL;
     if (!url) throw new Error('DATABASE_MCP_URL is not configured');
     const next = new Pool({
       connectionString: url,
-      max: 3,
+      // max: 1 is safe here — each serverless invocation runs one query at a time.
+      max: 1,
       connectionTimeoutMillis: 10000,
       idleTimeoutMillis: 30000,
       ssl: sslFor(url),
@@ -49,7 +56,7 @@ function getCosPool() {
     next.on('connect', (client) => {
       client.query('SET search_path = mcp, public').catch(() => {});
     });
-    // Self-heal on dead socket
+    // Self-heal on dead socket.
     next.on('error', () => { pool = null; });
     pool = next;
   }
