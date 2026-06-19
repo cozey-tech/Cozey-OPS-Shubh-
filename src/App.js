@@ -93,7 +93,6 @@ function renderBarcode(num) {
 
 function BarcodeLabel({ part }) {
   const bars = renderBarcode(part.barcode || 0);
-  const total = bars.reduce((s, b) => s + b, 0);
   return (
     <div className="label-card">
       <div className="label-header">
