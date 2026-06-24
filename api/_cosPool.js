@@ -63,6 +63,8 @@ function getCosPool() {
   return pool;
 }
 
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function runQuery(sql, params) {
   const client = await getCosPool().connect();
   try {
@@ -83,17 +85,21 @@ async function runQuery(sql, params) {
 // Guards against non-SELECT statements and retries on transient errors.
 async function queryCosReadOnly(sql, params = []) {
   if (!READ_ONLY.test(sql)) throw new Error('Only SELECT/WITH queries are allowed');
-  let lastErr;
-  for (let i = 0; i < RETRY_ATTEMPTS; i++) {
+  let attempt = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
     try {
       return await runQuery(sql, params);
     } catch (err) {
-      lastErr = err;
-      if (!isTransient(err)) throw err;
-      pool = null; // force reconnect on next attempt
+      if (attempt < RETRY_ATTEMPTS && isTransient(err)) {
+        attempt += 1;
+        pool = null; // force reconnect on next attempt
+        await delay(250 * attempt);
+        continue;
+      }
+      throw err;
     }
   }
-  throw lastErr;
 }
 
 module.exports = { queryCosReadOnly };
