@@ -23,6 +23,24 @@ function setCached(key, payload) {
   cache.set(key, { ts: Date.now(), payload });
 }
 
+function normalizeInventoryQuery(query = {}) {
+  let { location = 'royalmount', threshold = '10', quality = 'both', category = 'all', model = 'all', tab = 'lowstock' } = query;
+
+  if (!VALID_LOCATIONS.includes(location)) location = 'royalmount';
+  if (!VALID_TABS_INVENTORY.includes(tab)) tab = 'lowstock';
+  if (!VALID_QUALITY.includes(quality)) quality = 'both';
+  const thresh = Math.min(100, Math.max(1, parseInt(threshold) || 10));
+  const safeCategory = VALID_CATEGORIES.includes(category) ? category : null;
+  const safeModel = ALL_MODELS.includes(model) ? model : null;
+
+  return { tab, location, thresh, quality, safeCategory, safeModel };
+}
+
+function inventoryCacheKey(normalized) {
+  const { tab, location, thresh, quality, safeCategory, safeModel } = normalized;
+  return `inv-${tab}-${location}-${thresh}-${quality}-${safeCategory}-${safeModel}`;
+}
+
 module.exports = async (req, res) => {
   // Handle preflight before anything that might throw.
   if (req.method === 'OPTIONS') {
@@ -36,16 +54,8 @@ module.exports = async (req, res) => {
     if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
     // ── Input validation / allowlisting ────────────────────────────────────
-    let { location = 'royalmount', threshold = '10', quality = 'both', category = 'all', model = 'all', tab = 'lowstock' } = req.query;
-
-    if (!VALID_LOCATIONS.includes(location)) location = 'royalmount';
-    if (!VALID_TABS_INVENTORY.includes(tab)) tab = 'lowstock';
-    if (!VALID_QUALITY.includes(quality)) quality = 'both';
-    const thresh = Math.min(100, Math.max(1, parseInt(threshold) || 10));
-    const safeCategory = VALID_CATEGORIES.includes(category) ? category : null;
-    const safeModel = ALL_MODELS.includes(model) ? model : null;
-
-    const cacheKey = `inv-${tab}-${location}-${thresh}-${quality}-${safeCategory}-${safeModel}`;
+    const { tab, location, thresh, quality, safeCategory, safeModel } = normalizeInventoryQuery(req.query);
+    const cacheKey = inventoryCacheKey({ tab, location, thresh, quality, safeCategory, safeModel });
     res.setHeader('Cache-Control', 's-maxage=55, stale-while-revalidate=30');
 
     const hit = getCached(cacheKey);
@@ -223,8 +233,7 @@ module.exports = async (req, res) => {
   } catch (err) {
     console.error('inventory handler error:', err && err.message);
     // Serve stale cache on error rather than returning nothing.
-    const cacheKey = `inv-${req.query.tab || 'lowstock'}-${req.query.location || 'royalmount'}-${req.query.threshold || '10'}-${req.query.quality || 'both'}-${req.query.category || 'all'}-${req.query.model || 'all'}`;
-    const hit = getCached(cacheKey);
+    const hit = getCached(inventoryCacheKey(normalizeInventoryQuery(req.query)));
     if (hit) return res.status(200).json({ ...hit.payload, stale: true });
     return res.status(502).json({ error: 'Failed to fetch inventory data' });
   }
