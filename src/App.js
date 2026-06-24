@@ -357,7 +357,11 @@ function ProductivitySection({ location, activeView }) {
 
   const fetchData = useCallback(async () => {
     const tab = tabMap[activeView];
-    if (!tab || activeView === 'prod-orderlookup' || activeView === 'prod-prepdrilldown') { setLoading(false); return; }
+    if (!tab || activeView === 'prod-orderlookup' || activeView === 'prod-prepdrilldown') {
+      setLoading(false);
+      setError(null);
+      return;
+    }
     setLoading(true);
     try {
       const params = new URLSearchParams({ location, tab, date });
