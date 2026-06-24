@@ -57,7 +57,12 @@ module.exports = async (req, res) => {
 
   try {
     applyCors(res);
+  } catch (err) {
+    console.error('inventory cors failed:', err && err.message);
+    return res.status(500).json({ status: 'error', config: 'misconfigured' });
+  }
 
+  try {
     if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
     // ── Input validation / allowlisting ────────────────────────────────────
