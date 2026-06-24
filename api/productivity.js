@@ -7,10 +7,27 @@ const { VALID_LOCATIONS } = require('./_domain');
 
 const VALID_TABS = ['pack', 'label', 'leaderboard', 'orderlookup', 'packtime', 'notscanned', 'weekly', 'scantrend', 'prepdrilldown'];
 
+// In-memory best-effort cache (per serverless instance).
+// Bounded with oldest-first eviction so a flood of distinct filter keys cannot
+// grow the heap without limit for the life of the serverless instance.
 const cache = new Map();
 const CACHE_TTL_MS = 55 * 1000;
-function getCached(key) { const h = cache.get(key); if (!h || Date.now() - h.ts > CACHE_TTL_MS) { cache.delete(key); return null; } return h; }
-function setCached(key, payload) { cache.set(key, { ts: Date.now(), payload }); }
+const MAX_CACHE_ENTRIES = 200;
+
+function getCached(key) {
+  const hit = cache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.ts > CACHE_TTL_MS) { cache.delete(key); return null; }
+  return hit;
+}
+
+function setCached(key, payload) {
+  cache.delete(key); // re-insert at the end so recency = insertion order
+  cache.set(key, { ts: Date.now(), payload });
+  while (cache.size > MAX_CACHE_ENTRIES) {
+    cache.delete(cache.keys().next().value); // evict oldest
+  }
+}
 
 module.exports = async (req, res) => {
   if (req.method === 'OPTIONS') {
