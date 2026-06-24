@@ -1,32 +1,70 @@
+// GET /api/productivity — pack/label scan views for the Cozey Ops dashboard.
+// READ-ONLY against COS mcp.v_* views via the cos_mcp_reader role.
+
 const { queryCosReadOnly } = require('./_cosPool');
 const { applyCors } = require('./_auth');
+const { VALID_LOCATIONS } = require('./_domain');
 
-const VALID_LOCATIONS = ['royalmount', 'langley', 'windsor'];
-const VALID_TABS = ['pack', 'label', 'leaderboard', 'orderlookup', 'packtime', 'notscanned', 'hourly', 'weekly', 'prepdrilldown', 'scantrend'];
+const VALID_TABS = ['pack', 'label', 'leaderboard', 'orderlookup', 'packtime', 'notscanned', 'weekly', 'scantrend', 'prepdrilldown'];
+
+// In-memory best-effort cache (per serverless instance).
+// Bounded with oldest-first eviction so a flood of distinct filter keys cannot
+// grow the heap without limit for the life of the serverless instance.
+const cache = new Map();
+const CACHE_TTL_MS = 55 * 1000;
+const MAX_CACHE_ENTRIES = 200;
+
+function getCached(key) {
+  const hit = cache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.ts > CACHE_TTL_MS) { cache.delete(key); return null; }
+  return hit;
+}
+
+function setCached(key, payload) {
+  cache.delete(key); // re-insert at the end so recency = insertion order
+  cache.set(key, { ts: Date.now(), payload });
+  while (cache.size > MAX_CACHE_ENTRIES) {
+    cache.delete(cache.keys().next().value); // evict oldest
+  }
+}
 
 module.exports = async (req, res) => {
-  applyCors(res);
-  if (req.method === 'OPTIONS') return res.status(204).end();
-  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-
-  let { location = 'royalmount', tab = 'pack', date = 'today', order, prep } = req.query;
-
-  if (!VALID_LOCATIONS.includes(location)) location = 'royalmount';
-  if (!VALID_TABS.includes(tab)) tab = 'pack';
-
-  const cacheKey = `${tab}-${location}-${date}`;
-  res.setHeader('Cache-Control', 's-maxage=55, stale-while-revalidate=30');
+  if (req.method === 'OPTIONS') {
+    try { applyCors(res); } catch (_) {}
+    return res.status(204).end();
+  }
 
   try {
-    let rows = [];
+    applyCors(res);
+  } catch (err) {
+    console.error('productivity cors failed:', err && err.message);
+    return res.status(500).json({ status: 'error', config: 'misconfigured' });
+  }
+
+  try {
+    if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+
+    let { location = 'royalmount', tab = 'pack', date = 'today', order, prep } = req.query;
+    if (!VALID_LOCATIONS.includes(location)) location = 'royalmount';
+    if (!VALID_TABS.includes(tab)) tab = 'pack';
+    const dateFilter = date === 'yesterday' ? 'CURRENT_DATE - 1' : 'CURRENT_DATE';
+
+    res.setHeader('Cache-Control', 's-maxage=55, stale-while-revalidate=30');
+
+    const cacheKey = `prod-${tab}-${location}-${date}`;
+    const hit = getCached(cacheKey);
+    if (hit && tab !== 'orderlookup' && tab !== 'prepdrilldown') {
+      return res.status(200).json({ ...hit.payload, stale: false });
+    }
 
     if (tab === 'pack') {
-      rows = await queryCosReadOnly(`
-        SELECT 
+      const rows = await queryCosReadOnly(`
+        SELECT
           u.name,
-          COUNT(ppc.id) FILTER (WHERE ppc.packing_scan_method = 'SCANNER') as scanner_scans,
-          COUNT(ppc.id) FILTER (WHERE ppc.packing_scan_method = 'MANUAL') as manual_scans,
-          COUNT(ppc.id) as total_scans
+          COUNT(ppc.id) FILTER (WHERE ppc.packing_scan_method = 'SCANNER') AS scanner_scans,
+          COUNT(ppc.id) FILTER (WHERE ppc.packing_scan_method = 'MANUAL')  AS manual_scans,
+          COUNT(ppc.id)                                                     AS total_scans
         FROM mcp.v_pnp_packing_compliance ppc
         JOIN mcp.v_users u ON u.id = ppc.packed_by_user_id AND u.region = 'CA'
         JOIN mcp.v_prep_part_item ppi ON ppi.id = ppc.prep_part_item_id AND ppi.region = 'CA'
@@ -34,73 +72,77 @@ module.exports = async (req, res) => {
         JOIN mcp.v_prep p ON p.prep = pp."prepId" AND p.region = 'CA'
         WHERE p.location_id = $1
           AND p.region = 'CA'
-          AND DATE(ppc.created_at) = CASE WHEN $2 = 'today' THEN CURRENT_DATE ELSE CURRENT_DATE - 1 END
+          AND DATE(ppc.created_at) = ${dateFilter}
         GROUP BY u.name
         ORDER BY total_scans DESC
         LIMIT 20
-      `, [location, date]);
+      `, [location]);
+      const payload = { data: rows };
+      setCached(cacheKey, payload);
+      return res.status(200).json(payload);
     }
 
-    else if (tab === 'label') {
-      rows = await queryCosReadOnly(`
-        SELECT 
+    if (tab === 'label') {
+      const rows = await queryCosReadOnly(`
+        SELECT
           u.name,
-          COUNT(ppi.id) FILTER (WHERE ppi.label_scan_method = 'SCANNER') as scanner_scans,
-          COUNT(ppi.id) FILTER (WHERE ppi.label_scan_method = 'MANUAL') as manual_scans,
-          COUNT(ppi.id) as total_scans
+          COUNT(ppi.id) FILTER (WHERE ppi.label_scan_method = 'SCANNER') AS scanner_scans,
+          COUNT(ppi.id) FILTER (WHERE ppi.label_scan_method = 'MANUAL')  AS manual_scans,
+          COUNT(ppi.id)                                                   AS total_scans
         FROM mcp.v_prep_part_item ppi
         JOIN mcp.v_users u ON u.id = ppi.label_scanned_by_user_id AND u.region = 'CA'
         JOIN mcp.v_prep_part pp ON pp.id = ppi."prepPartId" AND pp.region = 'CA'
         JOIN mcp.v_prep p ON p.prep = pp."prepId" AND p.region = 'CA'
         WHERE p.location_id = $1
           AND p.region = 'CA'
-          AND DATE(ppi.label_scanned_at) = CASE WHEN $2 = 'today' THEN CURRENT_DATE ELSE CURRENT_DATE - 1 END
+          AND DATE(ppi.label_scanned_at) = ${dateFilter}
         GROUP BY u.name
         ORDER BY total_scans DESC
         LIMIT 20
-      `, [location, date]);
+      `, [location]);
+      const payload = { data: rows };
+      setCached(cacheKey, payload);
+      return res.status(200).json(payload);
     }
 
-    else if (tab === 'leaderboard') {
-      const pack = await queryCosReadOnly(`
-        SELECT u.name, COUNT(ppc.id) as total_scans, 
-          ROUND(COUNT(ppc.id) FILTER (WHERE ppc.packing_scan_method = 'SCANNER')::numeric / NULLIF(COUNT(ppc.id),0) * 100) as scanner_pct
-        FROM mcp.v_pnp_packing_compliance ppc
-        JOIN mcp.v_users u ON u.id = ppc.packed_by_user_id AND u.region = 'CA'
-        JOIN mcp.v_prep_part_item ppi ON ppi.id = ppc.prep_part_item_id AND ppi.region = 'CA'
-        JOIN mcp.v_prep_part pp ON pp.id = ppi."prepPartId" AND pp.region = 'CA'
-        JOIN mcp.v_prep p ON p.prep = pp."prepId" AND p.region = 'CA'
-        WHERE p.location_id = $1 AND p.region = 'CA'
-          AND DATE(ppc.created_at) = CURRENT_DATE
-        GROUP BY u.name ORDER BY total_scans DESC LIMIT 5
-      `, [location]);
-
-      const label = await queryCosReadOnly(`
-        SELECT u.name, COUNT(ppi.id) as total_scans,
-          ROUND(COUNT(ppi.id) FILTER (WHERE ppi.label_scan_method = 'SCANNER')::numeric / NULLIF(COUNT(ppi.id),0) * 100) as scanner_pct
-        FROM mcp.v_prep_part_item ppi
-        JOIN mcp.v_users u ON u.id = ppi.label_scanned_by_user_id AND u.region = 'CA'
-        JOIN mcp.v_prep_part pp ON pp.id = ppi."prepPartId" AND pp.region = 'CA'
-        JOIN mcp.v_prep p ON p.prep = pp."prepId" AND p.region = 'CA'
-        WHERE p.location_id = $1 AND p.region = 'CA'
-          AND DATE(ppi.label_scanned_at) = CURRENT_DATE
-        GROUP BY u.name ORDER BY total_scans DESC LIMIT 5
-      `, [location]);
-
-      return res.status(200).json({ packers: pack, labelers: label });
+    if (tab === 'leaderboard') {
+      const [pack, label] = await Promise.all([
+        queryCosReadOnly(`
+          SELECT u.name, COUNT(ppc.id) AS total_scans,
+            ROUND(COUNT(ppc.id) FILTER (WHERE ppc.packing_scan_method = 'SCANNER')::numeric / NULLIF(COUNT(ppc.id),0) * 100) AS scanner_pct
+          FROM mcp.v_pnp_packing_compliance ppc
+          JOIN mcp.v_users u ON u.id = ppc.packed_by_user_id AND u.region = 'CA'
+          JOIN mcp.v_prep_part_item ppi ON ppi.id = ppc.prep_part_item_id AND ppi.region = 'CA'
+          JOIN mcp.v_prep_part pp ON pp.id = ppi."prepPartId" AND pp.region = 'CA'
+          JOIN mcp.v_prep p ON p.prep = pp."prepId" AND p.region = 'CA'
+          WHERE p.location_id = $1 AND p.region = 'CA' AND DATE(ppc.created_at) = CURRENT_DATE
+          GROUP BY u.name ORDER BY total_scans DESC LIMIT 5
+        `, [location]),
+        queryCosReadOnly(`
+          SELECT u.name, COUNT(ppi.id) AS total_scans,
+            ROUND(COUNT(ppi.id) FILTER (WHERE ppi.label_scan_method = 'SCANNER')::numeric / NULLIF(COUNT(ppi.id),0) * 100) AS scanner_pct
+          FROM mcp.v_prep_part_item ppi
+          JOIN mcp.v_users u ON u.id = ppi.label_scanned_by_user_id AND u.region = 'CA'
+          JOIN mcp.v_prep_part pp ON pp.id = ppi."prepPartId" AND pp.region = 'CA'
+          JOIN mcp.v_prep p ON p.prep = pp."prepId" AND p.region = 'CA'
+          WHERE p.location_id = $1 AND p.region = 'CA' AND DATE(ppi.label_scanned_at) = CURRENT_DATE
+          GROUP BY u.name ORDER BY total_scans DESC LIMIT 5
+        `, [location]),
+      ]);
+      const payload = { packers: pack, labelers: label };
+      setCached(cacheKey, payload);
+      return res.status(200).json(payload);
     }
 
-    else if (tab === 'orderlookup') {
+    if (tab === 'orderlookup') {
       if (!order) return res.status(400).json({ error: 'order parameter required' });
       const orderNum = String(order).replace(/\D/g, '').slice(0, 20);
-      rows = await queryCosReadOnly(`
-        SELECT 
-          ppi.id,
-          p2.sku,
-          p2.description,
+      const rows = await queryCosReadOnly(`
+        SELECT
+          p2.sku, p2.description,
           ppi.label_scan_method,
-          u.name as labeled_by,
-          ppi.label_scanned_at::text as labeled_at
+          u.name  AS labeled_by,
+          ppi.label_scanned_at::text AS labeled_at
         FROM mcp.v_prep_part_item ppi
         JOIN mcp.v_prep_part pp ON pp.id = ppi."prepPartId" AND pp.region = 'CA'
         JOIN mcp.v_part p2 ON p2.id = pp.part_id AND p2.region = 'CA'
@@ -111,15 +153,15 @@ module.exports = async (req, res) => {
         ORDER BY p2.description
         LIMIT 50
       `, [orderNum]);
+      return res.status(200).json({ data: rows });
     }
 
-    else if (tab === 'packtime') {
-      rows = await queryCosReadOnly(`
-        SELECT 
-          p2.model_name,
-          p2.description,
-          COUNT(ppc.id) as scan_count,
-          ROUND(AVG(EXTRACT(EPOCH FROM (ppc.updated_at - ppc.created_at))/60)::numeric, 1) as avg_minutes
+    if (tab === 'packtime') {
+      const rows = await queryCosReadOnly(`
+        SELECT
+          p2.model_name, p2.description,
+          COUNT(ppc.id) AS scan_count,
+          ROUND(AVG(EXTRACT(EPOCH FROM (ppc.updated_at - ppc.created_at))/60)::numeric, 1) AS avg_minutes
         FROM mcp.v_pnp_packing_compliance ppc
         JOIN mcp.v_prep_part_item ppi ON ppi.id = ppc.prep_part_item_id AND ppi.region = 'CA'
         JOIN mcp.v_prep_part pp ON pp.id = ppi."prepPartId" AND pp.region = 'CA'
@@ -133,18 +175,19 @@ module.exports = async (req, res) => {
         ORDER BY avg_minutes DESC
         LIMIT 15
       `, [location]);
+      const payload = { data: rows };
+      setCached(cacheKey, payload);
+      return res.status(200).json(payload);
     }
 
-    else if (tab === 'notscanned') {
-      rows = await queryCosReadOnly(`
-        SELECT 
-          pp."prepId" as prep_id,
-          p2.sku,
-          p2.description,
-          p2.model_name,
+    if (tab === 'notscanned') {
+      const rows = await queryCosReadOnly(`
+        SELECT
+          pp."prepId"  AS prep_id,
+          p2.sku, p2.description, p2.model_name,
           pr.carrier,
-          CASE WHEN ppi.label_scanned_by_user_id IS NULL THEN 'Not labeled' ELSE 'Labeled' END as label_status,
-          CASE WHEN ppc.id IS NULL THEN 'Not packed' ELSE 'Packed' END as pack_status
+          CASE WHEN ppi.label_scanned_by_user_id IS NULL THEN 'Not labeled' ELSE 'Labeled' END AS label_status,
+          CASE WHEN ppc.id IS NULL THEN 'Not packed' ELSE 'Packed' END                        AS pack_status
         FROM mcp.v_prep_part_item ppi
         JOIN mcp.v_prep_part pp ON pp.id = ppi."prepPartId" AND pp.region = 'CA'
         JOIN mcp.v_part p2 ON p2.id = pp.part_id AND p2.region = 'CA'
@@ -156,16 +199,19 @@ module.exports = async (req, res) => {
         ORDER BY pr.carrier, p2.model_name
         LIMIT 200
       `, [location]);
+      const payload = { data: rows };
+      setCached(cacheKey, payload);
+      return res.status(200).json(payload);
     }
 
-    else if (tab === 'weekly') {
-      rows = await queryCosReadOnly(`
-        SELECT 
+    if (tab === 'weekly') {
+      const rows = await queryCosReadOnly(`
+        SELECT
           u.name,
-          DATE(ppc.created_at) as scan_date,
-          COUNT(ppc.id) FILTER (WHERE ppc.packing_scan_method = 'SCANNER') as scanner_scans,
-          COUNT(ppc.id) FILTER (WHERE ppc.packing_scan_method = 'MANUAL') as manual_scans,
-          COUNT(ppc.id) as total_scans
+          DATE(ppc.created_at) AS scan_date,
+          COUNT(ppc.id) FILTER (WHERE ppc.packing_scan_method = 'SCANNER') AS scanner_scans,
+          COUNT(ppc.id) FILTER (WHERE ppc.packing_scan_method = 'MANUAL')  AS manual_scans,
+          COUNT(ppc.id)                                                     AS total_scans
         FROM mcp.v_pnp_packing_compliance ppc
         JOIN mcp.v_users u ON u.id = ppc.packed_by_user_id AND u.region = 'CA'
         JOIN mcp.v_prep_part_item ppi ON ppi.id = ppc.prep_part_item_id AND ppi.region = 'CA'
@@ -177,16 +223,19 @@ module.exports = async (req, res) => {
         ORDER BY scan_date DESC, total_scans DESC
         LIMIT 100
       `, [location]);
+      const payload = { data: rows };
+      setCached(cacheKey, payload);
+      return res.status(200).json(payload);
     }
 
-    else if (tab === 'scantrend') {
-      rows = await queryCosReadOnly(`
-        SELECT 
-          DATE(ppc.created_at) as scan_date,
-          COUNT(ppc.id) FILTER (WHERE ppc.packing_scan_method = 'SCANNER') as scanner_scans,
-          COUNT(ppc.id) FILTER (WHERE ppc.packing_scan_method = 'MANUAL') as manual_scans,
-          COUNT(ppc.id) as total_scans,
-          ROUND(COUNT(ppc.id) FILTER (WHERE ppc.packing_scan_method = 'SCANNER')::numeric / NULLIF(COUNT(ppc.id),0) * 100) as scanner_pct
+    if (tab === 'scantrend') {
+      const rows = await queryCosReadOnly(`
+        SELECT
+          DATE(ppc.created_at) AS scan_date,
+          COUNT(ppc.id) FILTER (WHERE ppc.packing_scan_method = 'SCANNER') AS scanner_scans,
+          COUNT(ppc.id) FILTER (WHERE ppc.packing_scan_method = 'MANUAL')  AS manual_scans,
+          COUNT(ppc.id)                                                     AS total_scans,
+          ROUND(COUNT(ppc.id) FILTER (WHERE ppc.packing_scan_method = 'SCANNER')::numeric / NULLIF(COUNT(ppc.id),0) * 100) AS scanner_pct
         FROM mcp.v_pnp_packing_compliance ppc
         JOIN mcp.v_prep_part_item ppi ON ppi.id = ppc.prep_part_item_id AND ppi.region = 'CA'
         JOIN mcp.v_prep_part pp ON pp.id = ppi."prepPartId" AND pp.region = 'CA'
@@ -196,22 +245,23 @@ module.exports = async (req, res) => {
         GROUP BY DATE(ppc.created_at)
         ORDER BY scan_date ASC
       `, [location]);
+      const payload = { data: rows };
+      setCached(cacheKey, payload);
+      return res.status(200).json(payload);
     }
 
-    else if (tab === 'prepdrilldown') {
+    if (tab === 'prepdrilldown') {
       if (!prep) return res.status(400).json({ error: 'prep parameter required' });
       const prepId = String(prep).replace(/[^a-zA-Z0-9]/g, '').slice(0, 30);
-      rows = await queryCosReadOnly(`
-        SELECT 
-          p2.sku,
-          p2.description,
-          p2.model_name,
+      const rows = await queryCosReadOnly(`
+        SELECT
+          p2.sku, p2.description, p2.model_name,
           ppi.label_scan_method,
-          u_label.name as labeled_by,
-          ppi.label_scanned_at::text as labeled_at,
+          u_label.name            AS labeled_by,
+          ppi.label_scanned_at::text AS labeled_at,
           ppc.packing_scan_method,
-          u_pack.name as packed_by,
-          ppc.created_at::text as packed_at
+          u_pack.name             AS packed_by,
+          ppc.created_at::text    AS packed_at
         FROM mcp.v_prep_part_item ppi
         JOIN mcp.v_prep_part pp ON pp.id = ppi."prepPartId" AND pp.region = 'CA'
         JOIN mcp.v_part p2 ON p2.id = pp.part_id AND p2.region = 'CA'
@@ -222,11 +272,13 @@ module.exports = async (req, res) => {
         ORDER BY p2.model_name
         LIMIT 100
       `, [prepId]);
+      return res.status(200).json({ data: rows });
     }
 
-    return res.status(200).json({ data: rows });
+    return res.status(400).json({ error: 'Unknown tab' });
+
   } catch (err) {
-    console.error('Productivity query failed:', err?.message);
+    console.error('productivity handler error:', err && err.message);
     return res.status(502).json({ error: 'Failed to fetch productivity data' });
   }
 };

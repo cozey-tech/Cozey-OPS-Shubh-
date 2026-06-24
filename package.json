@@ -1,24 +1,30 @@
 {
-  "name": "inventory-dashboard",
+  "name": "cozey-ops",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "22.x"
+  },
   "dependencies": {
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-scripts": "5.0.1",
-    "web-vitals": "^2.1.4",
     "pg": "^8.11.0"
-  },
-  "engines": {
-    "node": ">=18 <=22"
   },
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
-    "test": "react-scripts test"
+    "test": "react-scripts test",
+    "lint": "eslint src/ api/ --max-warnings 0"
   },
   "eslintConfig": {
     "extends": ["react-app"]
+  },
+  "prettier": {
+    "printWidth": 120,
+    "singleQuote": false,
+    "tabWidth": 2,
+    "trailingComma": "all"
   },
   "browserslist": {
     "production": [">0.2%", "not dead", "not op_mini all"],

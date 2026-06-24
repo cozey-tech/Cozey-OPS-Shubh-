@@ -63,12 +63,36 @@ function getDaysLeft(available, orders30d) {
 }
 
 function exportCSV(data, headers, filename) {
-  const rows = data.map(r => headers.map(h => `"${r[h.key] ?? ''}"`).join(','));
+  // Escape embedded double-quotes by doubling them (RFC 4180).
+  // Guard against formula injection by prefixing values starting with = + - @ with a single quote.
+  function escapeCell(v) {
+    const s = String(v ?? '');
+    const safe = /^[=+\-@]/.test(s) ? "'" + s : s;
+    return '"' + safe.replace(/"/g, '""') + '"';
+  }
+  const rows = data.map(r => headers.map(h => escapeCell(r[h.key])).join(','));
   const csv = [headers.map(h => h.label).join(','), ...rows].join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
   a.download = filename;
   a.click();
+}
+
+async function parseApiJson(res) {
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    throw new Error(`Invalid response (${res.status})`);
+  }
+  if (!res.ok) {
+    const msg = data.error || data.details
+      || (data.config === 'misconfigured' ? 'Server misconfigured — check DASHBOARD_ORIGIN' : null)
+      || `Request failed (${res.status})`;
+    throw new Error(msg);
+  }
+  if (data.error) throw new Error(data.details || data.error);
+  return data;
 }
 
 function Clock() {
@@ -91,13 +115,13 @@ function renderBarcode(num) {
   return bars;
 }
 
-function BarcodeLabel({ part }) {
+function BarcodeLabel({ part, locationName }) {
   const bars = renderBarcode(part.barcode || 0);
   return (
     <div className="label-card">
       <div className="label-header">
         <span className="label-brand">COZEY</span>
-        <span className="label-location">Royalmount FC</span>
+        <span className="label-location">{locationName}</span>
       </div>
       <div className="label-sku">{part.sku}</div>
       <div className="label-desc">{part.description}</div>
@@ -121,11 +145,13 @@ function BarcodeLabel({ part }) {
 
 // ─── Inventory Section ───────────────────────────────────────────────────────
 
-function InventorySection({ location, activeView, setActiveView }) {
+function InventorySection({ location, activeView, setActiveView, onFeedStatus }) {
   const [inventory, setInventory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [lastSync, setLastSync] = useState(null);
+  const [dataStale, setDataStale] = useState(false);
+  const [totalCount, setTotalCount] = useState(0);
   const [threshold, setThreshold] = useState(10);
   const [thresholdInput, setThresholdInput] = useState('10');
   const [quality, setQuality] = useState('both');
@@ -142,20 +168,32 @@ function InventorySection({ location, activeView, setActiveView }) {
       const t = tab || activeView;
       const params = new URLSearchParams({ location, threshold, quality, category, model, tab: t === 'inv-pos' ? 'pos' : t.replace('inv-', '') });
       const res = await fetch(`/api/inventory?${params}`);
-      const data = await res.json();
-      if (data.error) throw new Error(data.details || data.error);
+      const data = await parseApiJson(res);
       if (t === 'inv-pos') setPos(data.pos || []);
       else setInventory(data.inventory || []);
-      setLastSync(new Date());
+      setTotalCount(data.totalCount ?? (data.inventory || data.pos || []).length);
+      const stale = Boolean(data.stale);
+      setDataStale(stale);
+      onFeedStatus?.(stale);
+      setLastSync(data.cachedAt ? new Date(data.cachedAt) : new Date());
       setError(null);
-    } catch (e) { setError(e.message); }
+    } catch (e) {
+      setDataStale(false);
+      onFeedStatus?.(false);
+      setError(e.message);
+    }
     finally { setLoading(false); }
-  }, [location, threshold, quality, category, model, activeView]);
+  }, [location, threshold, quality, category, model, activeView, onFeedStatus]);
 
   useEffect(() => {
     setLoading(true); setPage(1);
     fetchInventory(activeView);
-    const id = setInterval(() => fetchInventory(activeView), 60000);
+    // Poll every 5 minutes (not 60s) so Neon can autosuspend when no one is watching.
+    // The CDN s-maxage=55 header handles freshness for active users.
+    // Pause polling when the tab is hidden to save even more.
+    const id = setInterval(() => {
+      if (!document.hidden) fetchInventory(activeView);
+    }, 5 * 60 * 1000);
     return () => clearInterval(id);
   }, [fetchInventory, activeView]);
 
@@ -174,7 +212,9 @@ function InventorySection({ location, activeView, setActiveView }) {
   }), [inventory]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  // Clamp page after data refresh so we never show a false empty state (C3).
+  const clampedPage = Math.min(page, totalPages);
+  const paginated = filtered.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
 
   return (
     <div className="section-wrap">
@@ -213,6 +253,10 @@ function InventorySection({ location, activeView, setActiveView }) {
         </div>
       )}
 
+      {dataStale && !loading && !error && (
+        <div className="stale-banner"><i className="ti ti-alert-triangle" aria-hidden="true"></i>Showing cached data — live refresh failed. Do not treat stock levels as current.</div>
+      )}
+
       {loading ? <div className="loading"><i className="ti ti-loader-2" style={{ animation: 'spin 1s linear infinite' }} aria-hidden="true"></i>Loading...</div>
       : error ? <div className="error-msg"><i className="ti ti-alert-circle" aria-hidden="true"></i>{error}</div>
       : (
@@ -240,7 +284,7 @@ function InventorySection({ location, activeView, setActiveView }) {
               </div>
               <div className="tbl-footer">
                 <button className="export-btn" onClick={() => exportCSV(filtered, [{key:'sku',label:'SKU'},{key:'description',label:'Description'},{key:'quality_id',label:'Quality'},{key:'on_hand',label:'On Hand'},{key:'committed',label:'Committed'},{key:'receiving',label:'Receiving'},{key:'available',label:'Available'}], 'low-stock.csv')}><i className="ti ti-download" aria-hidden="true"></i>Export CSV</button>
-                <div className="pag"><button className="pag-btn" disabled={page===1} onClick={() => setPage(p=>p-1)}>← Prev</button><span className="pag-info">Page {page} of {totalPages} · {filtered.length} items</span><button className="pag-btn" disabled={page===totalPages} onClick={() => setPage(p=>p+1)}>Next →</button></div>
+                <div className="pag"><button className="pag-btn" disabled={clampedPage===1} onClick={() => setPage(p=>p-1)}>← Prev</button><span className="pag-info">Page {clampedPage} of {totalPages} · {filtered.length} items</span><button className="pag-btn" disabled={clampedPage===totalPages} onClick={() => setPage(p=>p+1)}>Next →</button></div>
               </div>
             </div>
           )}
@@ -249,7 +293,7 @@ function InventorySection({ location, activeView, setActiveView }) {
             <div className="tbl-section">
               <div className="tbl-scroll">
                 <table><thead><tr><th style={{width:'13%'}}>SKU</th><th style={{width:'25%'}}>Description</th><th style={{width:'7%'}}>Quality</th><th style={{width:'7%'}}>Available</th><th style={{width:'10%'}}>30d orders</th><th style={{width:'18%'}}>Last restocked</th><th style={{width:'20%'}}>Days left</th></tr></thead>
-                  <tbody>{inventory.slice(0, 100).map((r, i) => { const days = getDaysLeft(r.available, r.orders_30d); const restock = formatRestockDate(r.last_restock_date); return (
+                  <tbody>{inventory.map((r, i) => { const days = getDaysLeft(r.available, r.orders_30d); const restock = formatRestockDate(r.last_restock_date); return (
                     <tr key={r.sku + i}><td><div className="sku">{r.sku}</div><div className="model-name">{r.model_name}</div></td><td title={r.description}>{r.description}</td>
                       <td><span className={`badge ${r.quality_id === 'new' ? 'badge-new' : 'badge-ref'}`}>{r.quality_id === 'new' ? 'New' : 'Refurb'}</span></td>
                       <td><span className="oh" style={{color: getAvailColor(r.available)}}>{r.available}</span></td>
@@ -296,10 +340,10 @@ function InventorySection({ location, activeView, setActiveView }) {
 
           {activeView === 'inv-crossfc' && (
             <div className="tbl-section">
-              <div className="tbl-toolbar"><span className="result-ct">{inventory.length} SKUs across all FCs</span></div>
+              <div className="tbl-toolbar"><span className="result-ct">{totalCount || inventory.length} SKUs across all FCs{totalCount > inventory.length ? ' (showing first 200)' : ''}</span></div>
               <div className="tbl-scroll">
                 <table><thead><tr><th style={{width:'13%'}}>SKU</th><th style={{width:'26%'}}>Description</th><th style={{width:'7%'}}>Quality</th><th style={{width:'11%',textAlign:'center'}}>Royalmount</th><th style={{width:'9%',textAlign:'center'}}>Langley</th><th style={{width:'9%',textAlign:'center'}}>Windsor</th><th style={{width:'25%'}}>Transfer option</th></tr></thead>
-                  <tbody>{inventory.slice(0, 100).map((r, i) => {
+                  <tbody>{inventory.map((r, i) => {
                     const rm = r.royalmount ?? null, la = r.langley ?? null, wi = r.windsor ?? null;
                     let transfer = null;
                     if (rm !== null && rm <= 0 && la > 0) transfer = `Transfer from Langley (${la})`;
@@ -326,7 +370,7 @@ function InventorySection({ location, activeView, setActiveView }) {
 
 // ─── Productivity Section ────────────────────────────────────────────────────
 
-function ProductivitySection({ location, activeView }) {
+function ProductivitySection({ location, activeView, onFeedStatus }) {
   const [data, setData] = useState([]);
   const [extra, setExtra] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -343,20 +387,28 @@ function ProductivitySection({ location, activeView }) {
 
   const fetchData = useCallback(async () => {
     const tab = tabMap[activeView];
-    if (!tab || activeView === 'prod-orderlookup' || activeView === 'prod-prepdrilldown') { setLoading(false); return; }
+    if (!tab || activeView === 'prod-orderlookup' || activeView === 'prod-prepdrilldown') {
+      setLoading(false);
+      setError(null);
+      return;
+    }
     setLoading(true);
     try {
       const params = new URLSearchParams({ location, tab, date });
       const res = await fetch(`/api/productivity?${params}`);
-      const json = await res.json();
-      if (json.error) throw new Error(json.error);
+      const json = await parseApiJson(res);
       if (activeView === 'prod-leaderboard') { setData(json.packers || []); setExtra(json.labelers || []); }
       else setData(json.data || []);
-      setLastSync(new Date());
+      const stale = Boolean(json.stale);
+      onFeedStatus?.(stale);
+      setLastSync(json.cachedAt ? new Date(json.cachedAt) : new Date());
       setError(null);
-    } catch (e) { setError(e.message); }
+    } catch (e) {
+      onFeedStatus?.(false);
+      setError(e.message);
+    }
     finally { setLoading(false); }
-  }, [location, activeView, date]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [location, activeView, date, onFeedStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetchData(); const id = setInterval(fetchData, 60000); return () => clearInterval(id); }, [fetchData]);
 
@@ -593,7 +645,8 @@ function ProductivitySection({ location, activeView }) {
 
 // ─── Barcode Section ─────────────────────────────────────────────────────────
 
-function BarcodeSection() {
+function BarcodeSection({ location }) {
+  const locationName = LOCATIONS.find(l => l.id === location)?.name || 'Royalmount FC';
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('all');
   const [quality, setQuality] = useState('new');
@@ -619,14 +672,23 @@ function BarcodeSection() {
 
   function downloadPDF() {
     const selectedParts = parts.filter(p => selected.has(p.sku));
-    const html = `<!DOCTYPE html><html><head><style>body{font-family:monospace;margin:20px}.label{border:1px solid #ccc;padding:10px 14px;margin-bottom:12px;page-break-inside:avoid;width:300px}.brand{font-size:11px;font-weight:700;color:#111;margin-bottom:2px}.sku{font-size:14px;font-weight:700;margin-bottom:2px}.desc{font-size:9px;color:#374151;margin-bottom:6px;line-height:1.3}.barcode{display:flex;gap:1px;height:36px;margin-bottom:2px}.bar-black{background:#111}.bar-white{background:#fff}.barcode-num{font-size:9px;text-align:center;letter-spacing:.1em;margin-bottom:4px}.dims{font-size:8px;color:#6b7280;border-top:0.5px solid #e5e7eb;padding-top:4px}</style></head><body>${
+    const html = `<!DOCTYPE html><html><head><style>body{font-family:monospace;margin:20px}.label{border:1px solid #ccc;padding:10px 14px;margin-bottom:12px;page-break-inside:avoid;width:300px}.brand{font-size:11px;font-weight:700;color:#111;margin-bottom:2px}.loc{font-size:9px;color:#6b7280;margin-bottom:4px}.sku{font-size:14px;font-weight:700;margin-bottom:2px}.desc{font-size:9px;color:#374151;margin-bottom:6px;line-height:1.3}.barcode{display:flex;gap:1px;height:36px;margin-bottom:2px}.bar-black{background:#111}.bar-white{background:#fff}.barcode-num{font-size:9px;text-align:center;letter-spacing:.1em;margin-bottom:4px}.dims{font-size:8px;color:#6b7280;border-top:0.5px solid #e5e7eb;padding-top:4px}</style></head><body>${
       selectedParts.map(p => {
         const bars = String(p.barcode||0).padStart(9,'0').split('').map(c => ({'0':'212222','1':'222122','2':'222221','3':'121223','4':'121322','5':'131222','6':'122213','7':'122312','8':'132212','9':'221213'}[c]||'111111').split('').map(Number)).flat();
         const barsHtml = bars.map((w,i) => `<div class="${i%2===0?'bar-black':'bar-white'}" style="width:${w*1.5}px"></div>`).join('');
-        return `<div class="label"><div class="brand">COZEY</div><div class="sku">${p.sku}</div><div class="desc">${p.description}</div><div class="barcode">${barsHtml}</div><div class="barcode-num">${String(p.barcode||0).padStart(9,'0')}</div>${p.length?`<div class="dims">L: ${p.length}" · W: ${p.width}" · H: ${p.height}" · ${p.weight} lb</div>`:''}</div>`;
+        return `<div class="label"><div class="brand">COZEY</div><div class="loc">${locationName}</div><div class="sku">${p.sku}</div><div class="desc">${p.description}</div><div class="barcode">${barsHtml}</div><div class="barcode-num">${String(p.barcode||0).padStart(9,'0')}</div>${p.length?`<div class="dims">L: ${p.length}" · W: ${p.width}" · H: ${p.height}" · ${p.weight} lb</div>`:''}</div>`;
       }).join('')
     }</body></html>`;
     const w = window.open('', '_blank');
+    if (!w) {
+      const blob = new Blob([html], { type: 'text/html' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `barcode-labels-${location}.html`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      return;
+    }
     w.document.write(html);
     w.document.close();
     w.print();
@@ -680,7 +742,7 @@ function BarcodeSection() {
             <div style={{marginTop:12}}>
               <div style={{fontSize:12,fontWeight:500,color:'var(--color-text-primary)',marginBottom:8}}>Label preview</div>
               <div style={{display:'flex',flexWrap:'wrap',gap:12}}>
-                {parts.filter(p => selected.has(p.sku)).map(p => <BarcodeLabel key={p.sku} part={p} />)}
+                {parts.filter(p => selected.has(p.sku)).map(p => <BarcodeLabel key={p.sku} part={p} locationName={locationName} />)}
               </div>
             </div>
           )}
@@ -778,6 +840,9 @@ function ReturnsSection() {
 export default function App() {
   const [activeView, setActiveView] = useState('inv-lowstock');
   const [location, setLocation] = useState('royalmount');
+  const [feedStale, setFeedStale] = useState(false);
+
+  const handleFeedStatus = useCallback((stale) => setFeedStale(Boolean(stale)), []);
 
   const locationName = LOCATIONS.find(l => l.id === location)?.name || 'Royalmount FC';
 
@@ -839,7 +904,7 @@ export default function App() {
 
         <div className="sidebar-foot">
           <div className="foot-updated"><i className="ti ti-clock" style={{fontSize:12}} aria-hidden="true"></i><Clock /></div>
-          <div className="foot-note">Auto-refreshes every 60s</div>
+          <div className="foot-note">Inventory: every 5 min · Productivity: every 60s</div>
         </div>
       </div>
 
@@ -850,13 +915,19 @@ export default function App() {
             <div className="page-sub">{locationName}</div>
           </div>
           <div className="topbar-right">
-            <div className="badge-live"><div className="pulse"></div>Live</div>
+            {(section === 'inventory' || section === 'productivity') && (
+              feedStale ? (
+                <div className="badge-stale" title="Live refresh failed — showing cached data"><i className="ti ti-alert-triangle" aria-hidden="true"></i>Stale</div>
+              ) : (
+                <div className="badge-live"><div className="pulse"></div>Live</div>
+              )
+            )}
           </div>
         </div>
 
-        {section === 'inventory' && <InventorySection location={location} activeView={activeView} setActiveView={setActiveView} />}
-        {section === 'productivity' && <ProductivitySection location={location} activeView={activeView} />}
-        {activeView === 'barcode' && <BarcodeSection />}
+        {section === 'inventory' && <InventorySection location={location} activeView={activeView} setActiveView={setActiveView} onFeedStatus={handleFeedStatus} />}
+        {section === 'productivity' && <ProductivitySection location={location} activeView={activeView} onFeedStatus={handleFeedStatus} />}
+        {activeView === 'barcode' && <BarcodeSection location={location} />}
         {activeView === 'returns' && <ReturnsSection />}
       </div>
     </div>

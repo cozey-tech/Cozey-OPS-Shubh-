@@ -1,26 +1,39 @@
+// Shared request helpers: CORS scoping + optional office-secret check.
+//
+// This dashboard's API is READ-ONLY. The real access gate for production is
+// Vercel Deployment Protection (password/SSO) — enable it before connecting prod data.
+// applyCors scopes the browser origin (no more "*"). isOffice is provided
+// for any future write endpoints and is a LIGHT check only.
+
 const crypto = require('crypto');
 
-// This dashboard's API is READ-ONLY.
-// The real access gate for production is Vercel Deployment Protection.
-// applyCors scopes the browser origin. isOffice is for any future write endpoints.
-
 function applyCors(res) {
-  const origin = process.env.DASHBOARD_ORIGIN || '';
+  const origin = process.env.DASHBOARD_ORIGIN;
   if (!origin) {
-    console.error('DASHBOARD_ORIGIN is not set — CORS will block all browser requests');
+    // Fail loudly — silent CORS denial is very hard to debug.
+    throw new Error(
+      'DASHBOARD_ORIGIN env var is not set. ' +
+      'Set it to the app URL in Vercel (Production + Preview) before connecting production data.',
+    );
   }
-  if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-office-key');
 }
 
+// Timing-safe comparison of the provided office key against OFFICE_SECRET.
+// Uses SHA-256 digests so both sides are always equal length — avoids the
+// padEnd() trick which can throw on longer input and match with trailing spaces.
+// isOffice is a LIGHT check only — the real gate is Vercel Deployment Protection.
 function isOffice(req) {
   const secret = process.env.OFFICE_SECRET;
   if (!secret) return false;
   const provided = req.headers['x-office-key'] || '';
   try {
-    return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(secret));
+    const a = crypto.createHash('sha256').update(provided).digest();
+    const b = crypto.createHash('sha256').update(secret).digest();
+    return crypto.timingSafeEqual(a, b);
   } catch {
     return false;
   }
