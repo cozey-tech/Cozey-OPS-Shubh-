@@ -12,6 +12,12 @@ module.exports = async (req, res) => {
 
   try {
     applyCors(res);
+  } catch (err) {
+    console.error('health check cors failed:', err && err.message);
+    return res.status(500).json({ status: 'error', config: 'misconfigured' });
+  }
+
+  try {
     const start = Date.now();
     await queryCosReadOnly('SELECT 1', []);
     return res.status(200).json({ status: 'ok', db: 'reachable', latencyMs: Date.now() - start });
