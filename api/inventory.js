@@ -9,8 +9,11 @@ const { VALID_LOCATIONS, VALID_TABS_INVENTORY, VALID_QUALITY, VALID_CATEGORIES, 
 
 // In-memory best-effort cache (per serverless instance).
 // The real shared cache is Cache-Control: s-maxage on the CDN layer.
+// Bounded with oldest-first eviction so a flood of distinct filter keys cannot
+// grow the heap without limit for the life of the serverless instance.
 const cache = new Map();
 const CACHE_TTL_MS = 55 * 1000;
+const MAX_CACHE_ENTRIES = 200;
 
 function getCached(key) {
   const hit = cache.get(key);
@@ -20,7 +23,11 @@ function getCached(key) {
 }
 
 function setCached(key, payload) {
+  cache.delete(key); // re-insert at the end so recency = insertion order
   cache.set(key, { ts: Date.now(), payload });
+  while (cache.size > MAX_CACHE_ENTRIES) {
+    cache.delete(cache.keys().next().value); // evict oldest
+  }
 }
 
 function normalizeInventoryQuery(query = {}) {
