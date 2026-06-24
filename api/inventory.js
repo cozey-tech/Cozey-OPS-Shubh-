@@ -114,6 +114,7 @@ module.exports = async (req, res) => {
           FROM mcp.v_prep_part pp
           JOIN mcp.v_prep pr ON pr.prep = pp."prepId" AND pr.region = 'CA'
           WHERE pp.region = 'CA'
+            AND pr."fulfillmentStatus" = 'Open'
             AND pr."prepDate" >= NOW() - INTERVAL '30 days'
           GROUP BY pp.part_id
         ),
