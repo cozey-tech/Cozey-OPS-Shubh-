@@ -1,4 +1,4 @@
-const { normalizeInventoryQuery, inventoryCacheKey } = require("../../api/inventoryCache");
+const { normalizeInventoryQuery, inventoryCacheKey } = require("../../api/_inventoryCache");
 
 /** Pre-fix error path keyed raw query params; success path used normalized values. */
 function legacyErrorCacheKey(query = {}) {

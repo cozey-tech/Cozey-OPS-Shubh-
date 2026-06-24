@@ -50,7 +50,7 @@ module.exports = async (req, res) => {
         AND p.disabled = false
         AND ${qualityFilter}
         AND p."barcodeInteger" IS NOT NULL
-        AND (p.description ILIKE $1 OR p.sku ILIKE $1 OR p.model_name ILIKE $1)
+        AND (p.description ILIKE $1 ESCAPE '\\' OR p.sku ILIKE $1 ESCAPE '\\' OR p.model_name ILIKE $1 ESCAPE '\\')
         ${categoryClause}
       ORDER BY p.model_name, p.description
       LIMIT 50

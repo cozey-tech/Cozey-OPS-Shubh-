@@ -5,7 +5,7 @@
 
 const { queryCosReadOnly } = require('./_cosPool');
 const { applyCors } = require('./_auth');
-const { normalizeInventoryQuery, inventoryCacheKey } = require('./inventoryCache');
+const { normalizeInventoryQuery, inventoryCacheKey } = require('./_inventoryCache');
 
 // In-memory best-effort cache (per serverless instance).
 // The real shared cache is Cache-Control: s-maxage on the CDN layer.
@@ -228,11 +228,15 @@ const handler = async (req, res) => {
     console.error('inventory handler error:', err && err.message);
     // Serve stale cache on error rather than returning nothing.
     const hit = getCached(inventoryCacheKey(normalizeInventoryQuery(req.query)));
-    if (hit) return res.status(200).json({ ...hit.payload, stale: true });
+    if (hit) {
+      return res.status(200).json({
+        ...hit.payload,
+        stale: true,
+        cachedAt: new Date(hit.ts).toISOString(),
+      });
+    }
     return res.status(502).json({ error: 'Failed to fetch inventory data' });
   }
 };
 
 module.exports = handler;
-module.exports.normalizeInventoryQuery = normalizeInventoryQuery;
-module.exports.inventoryCacheKey = inventoryCacheKey;
