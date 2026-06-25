@@ -28,6 +28,7 @@ module.exports = async (req, res) => {
 
     res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=60');
 
+    // Use interval arithmetic so Postgres can compare timestamps correctly.
     const params = [daysNum];
     let modelFilter = '';
     if (safeModel && safeModel !== 'all') {
@@ -38,7 +39,8 @@ module.exports = async (req, res) => {
     const [rows, modelRows] = await Promise.all([
       queryCosReadOnly(`
         SELECT
-          p.model_name, p.category,
+          p.model_name,
+          p.category,
           orr."flowName"  AS flow_name,
           orr."errorType" AS error_type,
           COUNT(*)        AS count
@@ -47,7 +49,7 @@ module.exports = async (req, res) => {
         JOIN mcp.v_part p ON p.id = orp."partId" AND p.region = 'CA'
         WHERE orr."isDeleted" = false
           AND orr."errorType" IN ('WAREHOUSE', 'QUALITY_ASSURANCE', 'CUSTOMER_PREFERENCE')
-          AND orr."createdAt" >= CURRENT_DATE - $1
+          AND orr."createdAt" >= NOW() - ($1 || ' days')::interval
           ${modelFilter}
         GROUP BY p.model_name, p.category, orr."flowName", orr."errorType"
         ORDER BY count DESC
@@ -58,13 +60,18 @@ module.exports = async (req, res) => {
         FROM mcp.v_order_report_response orr
         JOIN mcp.v_order_report_parts orp ON orp."reportResponseId" = orr.id
         JOIN mcp.v_part p ON p.id = orp."partId" AND p.region = 'CA'
-        WHERE orr."isDeleted" = false AND p.model_name IS NOT NULL
+        WHERE orr."isDeleted" = false
+          AND p.model_name IS NOT NULL
         ORDER BY p.model_name
         LIMIT 100
       `, []),
     ]);
 
-    return res.status(200).json({ returns: rows, models: modelRows.map(m => m.model_name) });
+    return res.status(200).json({
+      returns: rows,
+      models: modelRows.map(m => m.model_name),
+    });
+
   } catch (err) {
     console.error('returns handler error:', err && err.message);
     return res.status(502).json({ error: 'Failed to fetch returns data' });
