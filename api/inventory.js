@@ -242,8 +242,8 @@ module.exports = async (req, res) => {
       let etaClause = '';
       if (safeEtaFilter === 'today')  etaClause = `AND DATE(po.eta) = CURRENT_DATE`;
       if (safeEtaFilter === 'week')   etaClause = `AND DATE(po.eta) >= DATE_TRUNC('week', CURRENT_DATE) AND DATE(po.eta) < DATE_TRUNC('week', CURRENT_DATE) + 7`;
-      if (safeEtaFilter === 'next7')  etaClause = `AND DATE(po.eta) <= CURRENT_DATE + 7`;
-      if (safeEtaFilter === 'next30') etaClause = `AND DATE(po.eta) <= CURRENT_DATE + 30`;
+      if (safeEtaFilter === 'next7')  etaClause = `AND DATE(po.eta) >= CURRENT_DATE AND DATE(po.eta) <= CURRENT_DATE + 7`;
+      if (safeEtaFilter === 'next30') etaClause = `AND DATE(po.eta) >= CURRENT_DATE AND DATE(po.eta) <= CURRENT_DATE + 30`;
 
       const rows = await queryCosReadOnly(`
         SELECT
