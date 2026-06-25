@@ -206,11 +206,12 @@ module.exports = async (req, res) => {
 
     // ── NOT SCANNED ────────────────────────────────────────────────────────
     // v_pnp_packing_compliance has no region column — do not filter on ppc.region.
+    // pp."prepId" is the prep code string (e.g. 369427A), not v_collection_prep.id.
     // v_collection_prep."prepDate" is used to filter today's preps.
     if (tab === 'notscanned') {
       const rows = await queryCosReadOnly(`
         SELECT DISTINCT ON (p2.sku, ppi.id)
-          cp.id              AS prep_id,
+          pp."prepId"        AS prep_id,
           p2.sku,
           p2.description,
           p2.model_name,
@@ -220,10 +221,11 @@ module.exports = async (req, res) => {
         FROM mcp.v_prep_part_item ppi
         JOIN mcp.v_prep_part pp ON pp.id = ppi."prepPartId" AND pp.region = 'CA'
         JOIN mcp.v_part p2 ON p2.id = pp.part_id AND p2.region = 'CA'
-        JOIN mcp.v_collection_prep cp ON cp.id = pp."prepId" AND cp.region = 'CA'
+        JOIN mcp.v_prep pr ON pr.prep = pp."prepId" AND pr.region = 'CA'
+        JOIN mcp.v_collection_prep cp ON cp.prep = pp."prepId" AND cp.region = 'CA'
         LEFT JOIN mcp.v_pnp_packing_compliance ppc ON ppc.prep_part_item_id = ppi.id
-        WHERE cp.location_id = $1
-          AND cp.region = 'CA'
+        WHERE pr.location_id = $1
+          AND pr.region = 'CA'
           AND DATE(cp."prepDate") = CURRENT_DATE
           AND ppi.region = 'CA'
           AND (ppi.label_scanned_by_user_id IS NULL OR ppc.id IS NULL)
