@@ -978,10 +978,11 @@ function ReturnsSection() {
       if (!map[key]) map[key] = { model: key, category: r.category, total: 0, damaged: 0, missing: 0, incorrect: 0, customerPref: 0, other: 0 };
       const count = parseInt(r.count || 0);
       map[key].total += count;
-      if (r.flow_name === 'damaged-item')         map[key].damaged      += count;
+      if (r.error_type === 'CUSTOMER_PREFERENCE' || r.flow_name === 'customer-preference') {
+        map[key].customerPref += count;
+      } else if (r.flow_name === 'damaged-item')         map[key].damaged   += count;
       else if (r.flow_name === 'missing-item')    map[key].missing      += count;
       else if (r.flow_name === 'incorrect-item')  map[key].incorrect    += count;
-      else if (r.flow_name === 'customer-preference') map[key].customerPref += count;
       else map[key].other += count;
     });
     return Object.values(map).sort((a, b) => b.total - a.total);
