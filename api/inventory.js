@@ -216,7 +216,7 @@ module.exports = async (req, res) => {
             AND ${qClause}
             ${extra}
           GROUP BY p.sku, p.description, p.model_name, p.quality_id, p.category
-          HAVING MIN(i."onHand" - i.on_hand_committed) <= $${pThresh}
+          HAVING MAX(CASE WHEN i.location_id = 'royalmount' THEN (i."onHand" - i.on_hand_committed) END) <= $${pThresh}
         )
         SELECT b.*, COUNT(*) OVER() AS total_count
         FROM base b
