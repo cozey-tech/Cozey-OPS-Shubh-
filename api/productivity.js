@@ -51,8 +51,13 @@ module.exports = async (req, res) => {
     // Date range: default to last 7 days if not provided
     const today = new Date().toISOString().split('T')[0];
     const sevenDaysAgo = new Date(Date.now() - 6 * 86400000).toISOString().split('T')[0];
-    const safeFrom = /^\d{4}-\d{2}-\d{2}$/.test(dateFrom) ? dateFrom : sevenDaysAgo;
-    const safeTo   = /^\d{4}-\d{2}-\d{2}$/.test(dateTo)   ? dateTo   : today;
+    const fourteenDaysAgo = new Date(Date.now() - 13 * 86400000).toISOString().split('T')[0];
+    let safeFrom = /^\d{4}-\d{2}-\d{2}$/.test(dateFrom) ? dateFrom : sevenDaysAgo;
+    let safeTo   = /^\d{4}-\d{2}-\d{2}$/.test(dateTo)   ? dateTo   : today;
+    if (tab === 'scantrend') {
+      safeFrom = fourteenDaysAgo;
+      safeTo = today;
+    }
 
     res.setHeader('Cache-Control', 's-maxage=55, stale-while-revalidate=30');
 

@@ -503,7 +503,7 @@ function ProductivitySection({ location, activeView }) {
 
   const isLookup = activeView === 'prod-orderlookup' || activeView === 'prod-prepdrilldown';
   // Scan trend and not scanned don't use date range pickers in the API
-  const showDateRange = !isLookup && activeView !== 'prod-notscanned';
+  const showDateRange = !isLookup && activeView !== 'prod-notscanned' && activeView !== 'prod-scantrend';
 
   const fetchData = useCallback(async () => {
     const tab = tabMap[activeView];
