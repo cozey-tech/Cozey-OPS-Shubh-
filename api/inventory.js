@@ -105,7 +105,7 @@ module.exports = async (req, res) => {
             COUNT(*)                                                    AS total_count,
             COUNT(*) FILTER (WHERE available < 0)                      AS negative_count,
             COUNT(*) FILTER (WHERE available = 0)                      AS oos_count,
-            COUNT(*) FILTER (WHERE available > 0 AND available <= 3)   AS critical_count,
+            COUNT(*) FILTER (WHERE available > 0 AND available <= $${pThresh}) AS critical_count,
             COUNT(*) FILTER (WHERE available >= 10)                    AS good_count
           FROM base
         )
