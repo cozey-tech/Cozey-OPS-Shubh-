@@ -203,14 +203,14 @@ function InventorySection({ location, activeView }) {
   }, [fetchInventory]);
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return inventory;
+    if (activeView !== 'inv-lowstock' || !search.trim()) return inventory;
     const q = search.toLowerCase();
     return inventory.filter(r =>
       r.sku?.toLowerCase().includes(q) ||
       r.description?.toLowerCase().includes(q) ||
       (r.model_name || '').toLowerCase().includes(q),
     );
-  }, [inventory, search]);
+  }, [inventory, search, activeView]);
 
   const totalPages  = Math.max(1, Math.ceil(filtered.length / pageSize));
   const clampedPage = Math.min(page, totalPages);
