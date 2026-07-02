@@ -41,6 +41,7 @@ module.exports = async (req, res) => {
     return res.status(500).json({ status: 'error', config: 'misconfigured' });
   }
 
+  let cacheKey = null;
   try {
     if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -56,7 +57,7 @@ module.exports = async (req, res) => {
     const safeModel = ALL_MODELS.includes(model) ? model : null;
     const safeEtaFilter = ['all', 'today', 'week', 'next7', 'next30'].includes(etaFilter) ? etaFilter : 'all';
 
-    const cacheKey = `inv-${tab}-${location}-${thresh}-${quality}-${safeCategory}-${safeModel}-${safeEtaFilter}`;
+    cacheKey = `inv-${tab}-${location}-${thresh}-${quality}-${safeCategory}-${safeModel}-${safeEtaFilter}`;
     res.setHeader('Cache-Control', 's-maxage=55, stale-while-revalidate=30');
 
     const hit = getCached(cacheKey);
@@ -278,6 +279,17 @@ module.exports = async (req, res) => {
 
   } catch (err) {
     console.error('inventory handler error:', err && err.message);
+    // Serve stale cache on error rather than returning nothing.
+    if (cacheKey) {
+      const stale = getCached(cacheKey);
+      if (stale) {
+        return res.status(200).json({
+          ...stale.payload,
+          stale: true,
+          cachedAt: new Date(stale.ts).toISOString(),
+        });
+      }
+    }
     return res.status(502).json({ error: 'Failed to fetch inventory data' });
   }
 };

@@ -71,7 +71,6 @@ module.exports = async (req, res) => {
       returns: rows,
       models: modelRows.map(m => m.model_name),
     });
-
   } catch (err) {
     console.error('returns handler error:', err && err.message);
     return res.status(502).json({ error: 'Failed to fetch returns data' });
